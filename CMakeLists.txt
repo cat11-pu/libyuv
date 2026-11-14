@@ -5,6 +5,7 @@
 cmake_minimum_required( VERSION 3.16 )
 project ( YUV C CXX )	# "C" is required even for C++ projects
 option( UNIT_TEST "Built unit tests" OFF )
+option( PROPERTY_TEST "Build randomized conversion property test" OFF )
 option( LIBYUV_DISABLE_JPEG "Disable JPEG support" OFF )
 option( LIBYUV_DISABLE_ASM "Disable inline assembly" OFF )
 option( LIBYUV_DISABLE_LSX "Disable LoongArch LSX" OFF )
@@ -256,6 +257,15 @@ if(WIN32)
   set_target_properties( ${ly_lib_shared} PROPERTIES IMPORT_PREFIX "lib" )
 endif()
 
+if(PROPERTY_TEST)
+  add_executable(convert_property_test
+    ${ly_base_dir}/property_test/convert_property_test.cc)
+  target_link_libraries(convert_property_test ${ly_lib_name})
+  if(NOT MSVC)
+    target_link_libraries(convert_property_test m)
+  endif()
+endif()
+
 # this creates the cpuid tool
 add_executable      ( cpuid ${ly_base_dir}/util/cpuid.c )
 target_link_libraries  ( cpuid ${ly_lib_static} )
@@ -333,4 +343,3 @@ install ( DIRECTORY ${PROJECT_SOURCE_DIR}/include/		DESTINATION include )
 
 # create the .deb and .rpm packages using cpack
 include ( CM_linux_packages.cmake )
-
