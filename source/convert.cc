@@ -4677,8 +4677,9 @@ int YUY2ToI420(const uint8_t* src_yuy2,
 #endif
 #if defined(HAS_YUY2TOYROW_AVX512BW) && defined(HAS_YUY2TOUVROW_AVX512BW)
   if (TestCpuFlag(kCpuHasAVX512BW)) {
-    YUY2ToUVRow = YUY2ToUVRow_AVX512BW;
     YUY2ToYRow = YUY2ToYRow_AVX512BW;
+    YUY2ToUVRow =
+        IS_ALIGNED(width, 2) ? YUY2ToUVRow_AVX512BW : YUY2ToUVRow_C;
   }
 #endif
 #if defined(HAS_YUY2TOYROW_NEON)
@@ -4694,13 +4695,13 @@ int YUY2ToI420(const uint8_t* src_yuy2,
 #if defined(HAS_YUY2TOYROW_SVE2) && defined(HAS_YUY2TOUVROW_SVE2)
   if (TestCpuFlag(kCpuHasSVE2)) {
     YUY2ToYRow = YUY2ToYRow_SVE2;
-    YUY2ToUVRow = YUY2ToUVRow_SVE2;
+    YUY2ToUVRow = IS_ALIGNED(width, 2) ? YUY2ToUVRow_SVE2 : YUY2ToUVRow_C;
   }
 #endif
 #if defined(HAS_YUY2TOYROW_SME) && defined(HAS_YUY2TOUVROW_SME)
   if (TestCpuFlag(kCpuHasSME)) {
     YUY2ToYRow = YUY2ToYRow_SME;
-    YUY2ToUVRow = YUY2ToUVRow_SME;
+    YUY2ToUVRow = IS_ALIGNED(width, 2) ? YUY2ToUVRow_SME : YUY2ToUVRow_C;
   }
 #endif
 #if defined(HAS_YUY2TOYROW_LSX) && defined(HAS_YUY2TOUVROW_LSX)
@@ -4726,7 +4727,7 @@ int YUY2ToI420(const uint8_t* src_yuy2,
 #if defined(HAS_YUY2TOYROW_HVX) && defined(HAS_YUY2TOUVROW_HVX)
   if (TestCpuFlag(kCpuHasHVX)) {
     YUY2ToYRow = YUY2ToYRow_HVX;
-    YUY2ToUVRow = YUY2ToUVRow_HVX;
+    YUY2ToUVRow = IS_ALIGNED(width, 2) ? YUY2ToUVRow_HVX : YUY2ToUVRow_C;
   }
 #endif
 #if defined(HAS_YUY2TOYROW_WASMSIMD) && defined(HAS_YUY2TOUVROW_WASMSIMD)
@@ -4806,8 +4807,9 @@ int UYVYToI420(const uint8_t* src_uyvy,
 #endif
 #if defined(HAS_UYVYTOYROW_AVX512BW) && defined(HAS_UYVYTOUVROW_AVX512BW)
   if (TestCpuFlag(kCpuHasAVX512BW)) {
-    UYVYToUVRow = UYVYToUVRow_AVX512BW;
     UYVYToYRow = UYVYToYRow_AVX512BW;
+    UYVYToUVRow =
+        IS_ALIGNED(width, 2) ? UYVYToUVRow_AVX512BW : UYVYToUVRow_C;
   }
 #endif
 #if defined(HAS_UYVYTOYROW_NEON)
@@ -4823,13 +4825,13 @@ int UYVYToI420(const uint8_t* src_uyvy,
 #if defined(HAS_UYVYTOYROW_SVE2) && defined(HAS_UYVYTOUVROW_SVE2)
   if (TestCpuFlag(kCpuHasSVE2)) {
     UYVYToYRow = UYVYToYRow_SVE2;
-    UYVYToUVRow = UYVYToUVRow_SVE2;
+    UYVYToUVRow = IS_ALIGNED(width, 2) ? UYVYToUVRow_SVE2 : UYVYToUVRow_C;
   }
 #endif
 #if defined(HAS_UYVYTOYROW_SME) && defined(HAS_UYVYTOUVROW_SME)
   if (TestCpuFlag(kCpuHasSME)) {
     UYVYToYRow = UYVYToYRow_SME;
-    UYVYToUVRow = UYVYToUVRow_SME;
+    UYVYToUVRow = IS_ALIGNED(width, 2) ? UYVYToUVRow_SME : UYVYToUVRow_C;
   }
 #endif
 #if defined(HAS_UYVYTOYROW_LSX)
@@ -4855,7 +4857,7 @@ int UYVYToI420(const uint8_t* src_uyvy,
 #if defined(HAS_UYVYTOYROW_HVX) && defined(HAS_UYVYTOUVROW_HVX)
   if (TestCpuFlag(kCpuHasHVX)) {
     UYVYToYRow = UYVYToYRow_HVX;
-    UYVYToUVRow = UYVYToUVRow_HVX;
+    UYVYToUVRow = IS_ALIGNED(width, 2) ? UYVYToUVRow_HVX : UYVYToUVRow_C;
   }
 #endif
 #if defined(HAS_UYVYTOYROW_WASMSIMD) && defined(HAS_UYVYTOUVROW_WASMSIMD)

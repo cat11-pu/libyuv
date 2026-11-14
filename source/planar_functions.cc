@@ -2939,8 +2939,9 @@ int YUY2ToI422(const uint8_t* src_yuy2,
 #endif
 #if defined(HAS_YUY2TOYROW_AVX512BW) && defined(HAS_YUY2TOUV422ROW_AVX512BW)
   if (TestCpuFlag(kCpuHasAVX512BW)) {
-    YUY2ToUV422Row = YUY2ToUV422Row_AVX512BW;
     YUY2ToYRow = YUY2ToYRow_AVX512BW;
+    YUY2ToUV422Row =
+        IS_ALIGNED(width, 2) ? YUY2ToUV422Row_AVX512BW : YUY2ToUV422Row_C;
   }
 #endif
 #if defined(HAS_YUY2TOYROW_NEON)
@@ -2986,7 +2987,8 @@ int YUY2ToI422(const uint8_t* src_yuy2,
 #if defined(HAS_YUY2TOYROW_HVX)
   if (TestCpuFlag(kCpuHasHVX)) {
     YUY2ToYRow = YUY2ToYRow_HVX;
-    YUY2ToUV422Row = YUY2ToUV422Row_HVX;
+    YUY2ToUV422Row =
+        IS_ALIGNED(width, 2) ? YUY2ToUV422Row_HVX : YUY2ToUV422Row_C;
   }
 #endif
 #if defined(HAS_YUY2TOYROW_WASMSIMD) && defined(HAS_YUY2TOUV422ROW_WASMSIMD)
@@ -3068,8 +3070,9 @@ int UYVYToI422(const uint8_t* src_uyvy,
 #endif
 #if defined(HAS_UYVYTOYROW_AVX512BW) && defined(HAS_UYVYTOUV422ROW_AVX512BW)
   if (TestCpuFlag(kCpuHasAVX512BW)) {
-    UYVYToUV422Row = UYVYToUV422Row_AVX512BW;
     UYVYToYRow = UYVYToYRow_AVX512BW;
+    UYVYToUV422Row =
+        IS_ALIGNED(width, 2) ? UYVYToUV422Row_AVX512BW : UYVYToUV422Row_C;
   }
 #endif
 #if defined(HAS_UYVYTOYROW_NEON)
@@ -3115,7 +3118,8 @@ int UYVYToI422(const uint8_t* src_uyvy,
 #if defined(HAS_UYVYTOYROW_HVX)
   if (TestCpuFlag(kCpuHasHVX)) {
     UYVYToYRow = UYVYToYRow_HVX;
-    UYVYToUV422Row = UYVYToUV422Row_HVX;
+    UYVYToUV422Row =
+        IS_ALIGNED(width, 2) ? UYVYToUV422Row_HVX : UYVYToUV422Row_C;
   }
 #endif
 #if defined(HAS_UYVYTOYROW_WASMSIMD) && defined(HAS_UYVYTOUV422ROW_WASMSIMD)
@@ -8079,9 +8083,17 @@ int UYVYToNV12(const uint8_t* src_uyvy,
 
     for (y = 0; y < height - 1; y += 2) {
       // Split Y from UV.
-      SplitUVRow(src_uyvy, rows + awidth, rows, awidth);
+      SplitUVRow(src_uyvy, rows + awidth, rows, width);
+      if (width & 1) {
+        rows[awidth + width] =
+            width > 1 ? rows[awidth + width - 2] : rows[awidth];
+      }
       memcpy(dst_y, rows, width);
-      SplitUVRow(src_uyvy + src_stride_uyvy, rows + awidth * 2, rows, awidth);
+      SplitUVRow(src_uyvy + src_stride_uyvy, rows + awidth * 2, rows, width);
+      if (width & 1) {
+        rows[awidth * 2 + width] =
+            width > 1 ? rows[awidth * 2 + width - 2] : rows[awidth * 2];
+      }
       memcpy(dst_y + dst_stride_y, rows, width);
       HalfRow(rows + awidth, awidth, dst_uv, awidth);
       src_uyvy += src_stride_uyvy * 2;
@@ -8090,7 +8102,10 @@ int UYVYToNV12(const uint8_t* src_uyvy,
     }
     if (height & 1) {
       // Split Y from UV.
-      SplitUVRow(src_uyvy, dst_uv, rows, awidth);
+      SplitUVRow(src_uyvy, dst_uv, rows, width);
+      if (width & 1) {
+        dst_uv[width] = width > 1 ? dst_uv[width - 2] : dst_uv[0];
+      }
       memcpy(dst_y, rows, width);
     }
     free_aligned_buffer_64(rows);

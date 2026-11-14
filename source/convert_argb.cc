@@ -6011,7 +6011,8 @@ int YUY2ToARGBMatrix(const uint8_t* src_yuy2,
 #endif
 #if defined(HAS_YUY2TOARGBROW_AVX512BW)
   if (TestCpuFlag(kCpuHasAVX512BW)) {
-    YUY2ToARGBRow = YUY2ToARGBRow_AVX512BW;
+    YUY2ToARGBRow =
+        IS_ALIGNED(width, 2) ? YUY2ToARGBRow_AVX512BW : YUY2ToARGBRow_C;
   }
 #endif
 #if defined(HAS_YUY2TOARGBROW_NEON)
@@ -6024,12 +6025,14 @@ int YUY2ToARGBMatrix(const uint8_t* src_yuy2,
 #endif
 #if defined(HAS_YUY2TOARGBROW_SVE2)
   if (TestCpuFlag(kCpuHasSVE2)) {
-    YUY2ToARGBRow = YUY2ToARGBRow_SVE2;
+    YUY2ToARGBRow =
+        IS_ALIGNED(width, 2) ? YUY2ToARGBRow_SVE2 : YUY2ToARGBRow_C;
   }
 #endif
 #if defined(HAS_YUY2TOARGBROW_SME)
   if (TestCpuFlag(kCpuHasSME)) {
-    YUY2ToARGBRow = YUY2ToARGBRow_SME;
+    YUY2ToARGBRow =
+        IS_ALIGNED(width, 2) ? YUY2ToARGBRow_SME : YUY2ToARGBRow_C;
   }
 #endif
 #if defined(HAS_YUY2TOARGBROW_LSX)
@@ -6124,7 +6127,8 @@ int UYVYToARGBMatrix(const uint8_t* src_uyvy,
 #endif
 #if defined(HAS_UYVYTOARGBROW_AVX512BW)
   if (TestCpuFlag(kCpuHasAVX512BW)) {
-    UYVYToARGBRow = UYVYToARGBRow_AVX512BW;
+    UYVYToARGBRow =
+        IS_ALIGNED(width, 2) ? UYVYToARGBRow_AVX512BW : UYVYToARGBRow_C;
   }
 #endif
 #if defined(HAS_UYVYTOARGBROW_NEON)
@@ -6137,12 +6141,14 @@ int UYVYToARGBMatrix(const uint8_t* src_uyvy,
 #endif
 #if defined(HAS_UYVYTOARGBROW_SVE2)
   if (TestCpuFlag(kCpuHasSVE2)) {
-    UYVYToARGBRow = UYVYToARGBRow_SVE2;
+    UYVYToARGBRow =
+        IS_ALIGNED(width, 2) ? UYVYToARGBRow_SVE2 : UYVYToARGBRow_C;
   }
 #endif
 #if defined(HAS_UYVYTOARGBROW_SME)
   if (TestCpuFlag(kCpuHasSME)) {
-    UYVYToARGBRow = UYVYToARGBRow_SME;
+    UYVYToARGBRow =
+        IS_ALIGNED(width, 2) ? UYVYToARGBRow_SME : UYVYToARGBRow_C;
   }
 #endif
 #if defined(HAS_UYVYTOARGBROW_LSX)

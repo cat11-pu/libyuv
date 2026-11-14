@@ -955,18 +955,33 @@ ANY21(SobelXYRow_Any_WASMSIMD, SobelXYRow_WASMSIMD, 0, 1, 1, 4, 15)
     SIMD_ALIGNED(uint8_t vout[(MASK + 1) * BPP]);                         \
     MSAN_MEMSET(vin, 0, sizeof(vin));   /* for msan */                    \
     MSAN_MEMSET(vout, 0, sizeof(vout)); /* for msan */                    \
-    int awidth = (width + 1) / 2;                                         \
-    int r = awidth & MASK;                                                \
-    int n = awidth & ~MASK;                                               \
+    int pairs = width >> 1;                                               \
+    int r = pairs & MASK;                                                 \
+    int n = pairs & ~MASK;                                                \
     if (n > 0) {                                                          \
       ANY_SIMD(src_yuy2, stride_yuy2, dst_uv, n * 2);                     \
     }                                                                     \
     ptrdiff_t np = n;                                                     \
-    memcpy(vin, src_yuy2 + np * SBPP, r * SBPP);                          \
+    int tail = r * SBPP;                                                   \
+    memcpy(vin, src_yuy2 + np * SBPP, tail);                              \
     memcpy(vin + (MASK + 1) * SBPP, src_yuy2 + stride_yuy2 + np * SBPP,   \
-           r * SBPP);                                                     \
+           tail);                                                         \
+    if (width & 1) {                                                      \
+      const uint8_t* tail_src = src_yuy2 + (np + r) * SBPP;               \
+      uint8_t* tail_dst = vin + tail;                                     \
+      uint8_t* tail_dst2 = vin + (MASK + 1) * SBPP + tail;                \
+      memcpy(tail_dst, tail_src, SBPP / 2);                               \
+      memcpy(tail_dst2, tail_src + stride_yuy2, SBPP / 2);                \
+      if (r) {                                                            \
+        memcpy(tail_dst + 2, tail_dst - 2, 2);                            \
+        memcpy(tail_dst2 + 2, tail_dst2 - 2, 2);                          \
+      } else {                                                            \
+        memcpy(tail_dst + 2, tail_dst, 2);                                \
+        memcpy(tail_dst2 + 2, tail_dst2, 2);                              \
+      }                                                                   \
+    }                                                                     \
     ANY_SIMD(vin, (MASK + 1) * SBPP, vout, (MASK + 1) * 2);               \
-    memcpy(dst_uv + np * BPP, vout, r * BPP);                             \
+    memcpy(dst_uv + np * BPP, vout, (r + (width & 1)) * BPP);             \
   }
 
 #ifdef HAS_YUY2TONVUVROW_NEON
@@ -2770,7 +2785,20 @@ ANY11P16(ByteToFloatRow_Any_WASMSIMD,
       ANY_SIMD(src_ptr, dst_ptr, yuvconstants, n);                            \
     }                                                                         \
     ptrdiff_t np = n;                                                         \
-    memcpy(vin, src_ptr + (np >> UVSHIFT) * SBPP, SS(r, UVSHIFT) * SBPP);     \
+    {                                                                         \
+      int pairs = r >> 1;                                                     \
+      int tail = pairs * SBPP;                                                \
+      const uint8_t* tail_src = src_ptr + (np >> 1) * SBPP;                   \
+      memcpy(vin, tail_src, tail);                                            \
+      if (r & 1) {                                                            \
+        memcpy(vin + tail, tail_src + tail, SBPP / 2);                        \
+        if (pairs) {                                                          \
+          memcpy(vin + tail + 2, vin + tail - 2, 2);                          \
+        } else {                                                              \
+          memcpy(vin + tail + 2, vin + tail, 2);                              \
+        }                                                                     \
+      }                                                                       \
+    }                                                                         \
     ANY_SIMD(vin, vout, yuvconstants, MASK + 1);                              \
     memcpy(dst_ptr + np * BPP, vout, r * BPP);                                \
   }
@@ -3766,7 +3794,22 @@ ANY1(ARGBSetRow_Any_WASMSIMD, ARGBSetRow_WASMSIMD, uint32_t, 4, 3)
       ANY_SIMD(src_ptr, dst_u, dst_v, n);                               \
     }                                                                   \
     ptrdiff_t np = n;                                                   \
-    memcpy(vin, src_ptr + (np >> UVSHIFT) * BPP, SS(r, UVSHIFT) * BPP); \
+    if (UVSHIFT == 1) {                                                 \
+      int pairs = r >> 1;                                               \
+      int tail = pairs * BPP;                                           \
+      const uint8_t* tail_src = src_ptr + (np >> 1) * BPP;              \
+      memcpy(vin, tail_src, tail);                                      \
+      if (r & 1) {                                                      \
+        memcpy(vin + tail, tail_src + tail, BPP / 2);                   \
+        if (pairs) {                                                    \
+          memcpy(vin + tail + 2, vin + tail - 2, 2);                    \
+        } else {                                                        \
+          memcpy(vin + tail + 2, vin + tail, 2);                        \
+        }                                                               \
+      }                                                                 \
+    } else {                                                            \
+      memcpy(vin, src_ptr + (np >> UVSHIFT) * BPP, SS(r, UVSHIFT) * BPP); \
+    }                                                                   \
     ANY_SIMD(vin, vout, vout + 256, MASK + 1);                          \
     memcpy(dst_u + (np >> DUVSHIFT), vout, SS(r, DUVSHIFT));            \
     memcpy(dst_v + (np >> DUVSHIFT), vout + 256, SS(r, DUVSHIFT));      \
@@ -3988,9 +4031,28 @@ ANY14(SplitARGBRow_Any_WASMSIMD, SplitARGBRow_WASMSIMD, 4, 15)
       ANY_SIMD(src_ptr, src_stride, dst_u, dst_v, n);                        \
     }                                                                        \
     ptrdiff_t np = n;                                                        \
-    memcpy(vin, src_ptr + (np >> UVSHIFT) * BPP, SS(r, UVSHIFT) * BPP);      \
-    memcpy(vin + 256, src_ptr + src_stride + (np >> UVSHIFT) * BPP,          \
-           SS(r, UVSHIFT) * BPP);                                            \
+    if (UVSHIFT == 1) {                                                      \
+      int pairs = r >> 1;                                                    \
+      int tail = pairs * BPP;                                                \
+      const uint8_t* tail_src = src_ptr + (np >> 1) * BPP;                   \
+      memcpy(vin, tail_src, tail);                                           \
+      memcpy(vin + 256, tail_src + src_stride, tail);                        \
+      if (r & 1) {                                                           \
+        memcpy(vin + tail, tail_src + tail, BPP / 2);                        \
+        memcpy(vin + 256 + tail, tail_src + src_stride + tail, BPP / 2);     \
+        if (pairs) {                                                         \
+          memcpy(vin + tail + 2, vin + tail - 2, 2);                         \
+          memcpy(vin + 256 + tail + 2, vin + 256 + tail - 2, 2);             \
+        } else {                                                             \
+          memcpy(vin + tail + 2, vin + tail, 2);                             \
+          memcpy(vin + 256 + tail + 2, vin + 256 + tail, 2);                 \
+        }                                                                    \
+      }                                                                      \
+    } else {                                                                 \
+      memcpy(vin, src_ptr + (np >> UVSHIFT) * BPP, SS(r, UVSHIFT) * BPP);    \
+      memcpy(vin + 256, src_ptr + src_stride + (np >> UVSHIFT) * BPP,        \
+             SS(r, UVSHIFT) * BPP);                                          \
+    }                                                                        \
     if ((width & 1) && UVSHIFT == 0) { /* repeat last pixel for subsample */ \
       memcpy(vin + SS(r, UVSHIFT) * BPP, vin + SS(r, UVSHIFT) * BPP - BPP,   \
              BPP);                                                           \

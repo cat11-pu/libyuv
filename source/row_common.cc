@@ -2602,8 +2602,10 @@ void YUY2ToARGBRow_C(const uint8_t* src_yuy2,
     rgb_buf += 8;  // Advance 2 pixels.
   }
   if (width & 1) {
-    YuvPixel(src_yuy2[0], src_yuy2[1], src_yuy2[3], rgb_buf + 0, rgb_buf + 1,
-             rgb_buf + 2, yuvconstants);
+    const int pairs = width >> 1;
+    const int v = pairs ? src_yuy2[-1] : src_yuy2[1];
+    YuvPixel(src_yuy2[0], src_yuy2[1], v, rgb_buf + 0, rgb_buf + 1, rgb_buf + 2,
+             yuvconstants);
     rgb_buf[3] = 255;
   }
 }
@@ -2624,8 +2626,10 @@ void UYVYToARGBRow_C(const uint8_t* src_uyvy,
     rgb_buf += 8;  // Advance 2 pixels.
   }
   if (width & 1) {
-    YuvPixel(src_uyvy[1], src_uyvy[0], src_uyvy[2], rgb_buf + 0, rgb_buf + 1,
-             rgb_buf + 2, yuvconstants);
+    const int pairs = width >> 1;
+    const int v = pairs ? src_uyvy[-2] : src_uyvy[0];
+    YuvPixel(src_uyvy[1], src_uyvy[0], v, rgb_buf + 0, rgb_buf + 1, rgb_buf + 2,
+             yuvconstants);
     rgb_buf[3] = 255;
   }
 }
@@ -3225,13 +3229,19 @@ void YUY2ToUVRow_C(const uint8_t* src_yuy2,
                    int width) {
   // Output a row of UV values, filtering 2 rows of YUY2.
   int x;
-  for (x = 0; x < width; x += 2) {
+  const int pairs = width >> 1;
+  for (x = 0; x < pairs; ++x) {
     const uint8_t* src_yuy2_next = src_yuy2 + src_stride_yuy2;
     dst_u[0] = (src_yuy2[1] + src_yuy2_next[1] + 1) >> 1;
     dst_v[0] = (src_yuy2[3] + src_yuy2_next[3] + 1) >> 1;
     src_yuy2 += 4;
     dst_u += 1;
     dst_v += 1;
+  }
+  if (width & 1) {
+    const uint8_t* src_yuy2_next = src_yuy2 + src_stride_yuy2;
+    dst_u[0] = (src_yuy2[1] + src_yuy2_next[1] + 1) >> 1;
+    dst_v[0] = pairs ? (src_yuy2[-1] + src_yuy2_next[-1] + 1) >> 1 : dst_u[0];
   }
 }
 
@@ -3242,12 +3252,19 @@ void YUY2ToNVUVRow_C(const uint8_t* src_yuy2,
                      int width) {
   // Output a row of UV values, filtering 2 rows of YUY2.
   int x;
-  for (x = 0; x < width; x += 2) {
+  const int pairs = width >> 1;
+  for (x = 0; x < pairs; ++x) {
     const uint8_t* src_yuy2_next = src_yuy2 + src_stride_yuy2;
     dst_uv[0] = (src_yuy2[1] + src_yuy2_next[1] + 1) >> 1;
     dst_uv[1] = (src_yuy2[3] + src_yuy2_next[3] + 1) >> 1;
     src_yuy2 += 4;
     dst_uv += 2;
+  }
+  if (width & 1) {
+    const uint8_t* src_yuy2_next = src_yuy2 + src_stride_yuy2;
+    dst_uv[0] = (src_yuy2[1] + src_yuy2_next[1] + 1) >> 1;
+    dst_uv[1] =
+        pairs ? (src_yuy2[-1] + src_yuy2_next[-1] + 1) >> 1 : dst_uv[0];
   }
 }
 
@@ -3258,12 +3275,17 @@ void YUY2ToUV422Row_C(const uint8_t* src_yuy2,
                       int width) {
   // Output a row of UV values.
   int x;
-  for (x = 0; x < width; x += 2) {
+  const int pairs = width >> 1;
+  for (x = 0; x < pairs; ++x) {
     dst_u[0] = src_yuy2[1];
     dst_v[0] = src_yuy2[3];
     src_yuy2 += 4;
     dst_u += 1;
     dst_v += 1;
+  }
+  if (width & 1) {
+    dst_u[0] = src_yuy2[1];
+    dst_v[0] = pairs ? src_yuy2[-1] : dst_u[0];
   }
 }
 
@@ -3289,13 +3311,19 @@ void UYVYToUVRow_C(const uint8_t* src_uyvy,
                    int width) {
   // Output a row of UV values.
   int x;
-  for (x = 0; x < width; x += 2) {
+  const int pairs = width >> 1;
+  for (x = 0; x < pairs; ++x) {
     const uint8_t* src_uyvy_next = src_uyvy + src_stride_uyvy;
     dst_u[0] = (src_uyvy[0] + src_uyvy_next[0] + 1) >> 1;
     dst_v[0] = (src_uyvy[2] + src_uyvy_next[2] + 1) >> 1;
     src_uyvy += 4;
     dst_u += 1;
     dst_v += 1;
+  }
+  if (width & 1) {
+    const uint8_t* src_uyvy_next = src_uyvy + src_stride_uyvy;
+    dst_u[0] = (src_uyvy[0] + src_uyvy_next[0] + 1) >> 1;
+    dst_v[0] = pairs ? (src_uyvy[-2] + src_uyvy_next[-2] + 1) >> 1 : dst_u[0];
   }
 }
 
@@ -3306,12 +3334,17 @@ void UYVYToUV422Row_C(const uint8_t* src_uyvy,
                       int width) {
   // Output a row of UV values.
   int x;
-  for (x = 0; x < width; x += 2) {
+  const int pairs = width >> 1;
+  for (x = 0; x < pairs; ++x) {
     dst_u[0] = src_uyvy[0];
     dst_v[0] = src_uyvy[2];
     src_uyvy += 4;
     dst_u += 1;
     dst_v += 1;
+  }
+  if (width & 1) {
+    dst_u[0] = src_uyvy[0];
+    dst_v[0] = pairs ? src_uyvy[-2] : dst_u[0];
   }
 }
 
