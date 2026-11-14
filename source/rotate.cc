@@ -12,12 +12,14 @@
 
 #include <assert.h>
 #include <limits.h>
+#include <string.h>
 
 #include "libyuv/convert.h"
 #include "libyuv/cpu_id.h"
 #include "libyuv/planar_functions.h"
 #include "libyuv/rotate_row.h"
 #include "libyuv/row.h"
+#include "libyuv/scale_row.h"
 
 #ifdef __cplusplus
 namespace libyuv {
@@ -1067,6 +1069,290 @@ int I420Rotate(const uint8_t* src_y,
   return -1;
 }
 
+// Rotate and horizontally subsample a chroma plane by 2, writing the result
+// into the bottom of the destination plane. The source height must be even.
+static void RotateScalePlane2x(const uint8_t* src,
+                               int src_stride,
+                               uint8_t* dst,
+                               int dst_stride,
+                               int src_width,
+                               int src_height,
+                               int dst_width,
+                               int dst_height,
+                               enum RotationMode mode) {
+  const int rotated_height = src_width;
+  uint8_t* scratch =
+      dst + (ptrdiff_t)(dst_height - rotated_height) * dst_stride;
+  uint8_t* tile = dst;
+  void (*HalfRow)(const uint8_t* src_ptr, ptrdiff_t src_stride,
+                  uint8_t* dst_ptr, int width) = HalfRow_C;
+
+#if defined(HAS_HALFROW_AVX2)
+  if (TestCpuFlag(kCpuHasAVX2)) {
+    HalfRow = HalfRow_Any_AVX2;
+    if (IS_ALIGNED(src_width, 32)) {
+      HalfRow = HalfRow_AVX2;
+    }
+  }
+#endif
+#if defined(HAS_HALFROW_AVX512BW)
+  if (TestCpuFlag(kCpuHasAVX512BW)) {
+    HalfRow = HalfRow_AVX512BW;
+  }
+#endif
+#if defined(HAS_HALFROW_NEON)
+  if (TestCpuFlag(kCpuHasNEON)) {
+    HalfRow = HalfRow_Any_NEON;
+    if (IS_ALIGNED(src_width, 16)) {
+      HalfRow = HalfRow_NEON;
+    }
+  }
+#endif
+#if defined(HAS_HALFROW_SVE2)
+  if (TestCpuFlag(kCpuHasSVE2)) {
+    HalfRow = HalfRow_SVE2;
+  }
+#endif
+#if defined(HAS_HALFROW_SME)
+  if (TestCpuFlag(kCpuHasSME)) {
+    HalfRow = HalfRow_SME;
+  }
+#endif
+#if defined(HAS_HALFROW_LSX)
+  if (TestCpuFlag(kCpuHasLSX)) {
+    HalfRow = HalfRow_Any_LSX;
+    if (IS_ALIGNED(src_width, 16)) {
+      HalfRow = HalfRow_LSX;
+    }
+  }
+#endif
+#if defined(HAS_HALFROW_LASX)
+  if (TestCpuFlag(kCpuHasLASX)) {
+    HalfRow = HalfRow_Any_LASX;
+    if (IS_ALIGNED(src_width, 32)) {
+      HalfRow = HalfRow_LASX;
+    }
+  }
+#endif
+#if defined(HAS_HALFROW_RVV)
+  if (TestCpuFlag(kCpuHasRVV)) {
+    HalfRow = HalfRow_RVV;
+  }
+#endif
+#if defined(HAS_HALFROW_WASMSIMD)
+  if (TestCpuFlag(kCpuHasWASMSIMD)) {
+    HalfRow = HalfRow_Any_WASMSIMD;
+    if (IS_ALIGNED(src_width, 16)) {
+      HalfRow = HalfRow_WASMSIMD;
+    }
+  }
+#endif
+#if defined(HAS_HALFROW_HVX)
+  if (TestCpuFlag(kCpuHasHVX)) {
+    HalfRow = HalfRow_HVX;
+  }
+#endif
+
+  // Each iteration averages 16 vertically adjacent source row pairs and
+  // transposes them into 16 scratch rows.
+  for (int k = 0; k < dst_width; k += 16) {
+    int rows = dst_width - k < 16 ? dst_width - k : 16;
+    for (int i = 0; i < rows; ++i) {
+      int row0;
+      ptrdiff_t stride;
+      if (mode == kRotate90) {
+        row0 = src_height - 1 - 2 * (k + i);
+        stride = -src_stride;
+      } else {
+        row0 = 2 * (k + i);
+        stride = src_stride;
+      }
+      HalfRow(src + (ptrdiff_t)row0 * src_stride, stride,
+              tile + (size_t)i * src_width, src_width);
+    }
+    uint8_t* tile_dst =
+        mode == kRotate90
+            ? scratch + k
+            : scratch + (ptrdiff_t)(rotated_height - 1) * dst_stride + k;
+    TransposePlane(tile, src_width, tile_dst,
+                   mode == kRotate90 ? dst_stride : -dst_stride, src_width,
+                   rows);
+  }
+}
+
+// Expand the horizontally scaled scratch rows in place. Rows are written from
+// the top down; a destination row can only overwrite scratch rows that are no
+// longer needed. A rolling two-row buffer keeps aliased source rows available.
+static void ScaleRotatedPlaneInPlace(uint8_t* dst,
+                                     int dst_stride,
+                                     int dst_width,
+                                     int src_width,
+                                     int src_height,
+                                     int dst_height,
+                                     enum FilterMode filtering,
+                                     uint8_t* rowbuf) {
+  int x = 0;
+  int y = 0;
+  int dx = 0;
+  int dy = 0;
+  void (*InterpolateRow)(uint8_t* dst_ptr, const uint8_t* src_ptr,
+                         ptrdiff_t src_stride, int width,
+                         int source_y_fraction) = InterpolateRow_C;
+  uint8_t* scratch =
+      dst + (ptrdiff_t)(dst_height - src_height) * dst_stride;
+  const uint32_t max_y = (uint32_t)(src_height - 1) << 16;
+
+#if defined(HAS_INTERPOLATEROW_AVX2)
+  if (TestCpuFlag(kCpuHasAVX2)) {
+    InterpolateRow = InterpolateRow_Any_AVX2;
+    if (IS_ALIGNED(dst_width, 32)) {
+      InterpolateRow = InterpolateRow_AVX2;
+    }
+  }
+#endif
+#if defined(HAS_INTERPOLATEROW_AVX512BW)
+  if (TestCpuFlag(kCpuHasAVX512BW)) {
+    InterpolateRow = InterpolateRow_AVX512BW;
+  }
+#endif
+#if defined(HAS_INTERPOLATEROW_NEON)
+  if (TestCpuFlag(kCpuHasNEON)) {
+    InterpolateRow = InterpolateRow_Any_NEON;
+    if (IS_ALIGNED(dst_width, 16)) {
+      InterpolateRow = InterpolateRow_NEON;
+    }
+  }
+#endif
+#if defined(HAS_INTERPOLATEROW_SVE2)
+  if (TestCpuFlag(kCpuHasSVE2)) {
+    InterpolateRow = InterpolateRow_SVE2;
+  }
+#endif
+#if defined(HAS_INTERPOLATEROW_SME)
+  if (TestCpuFlag(kCpuHasSME)) {
+    InterpolateRow = InterpolateRow_SME;
+  }
+#endif
+#if defined(HAS_INTERPOLATEROW_LSX)
+  if (TestCpuFlag(kCpuHasLSX)) {
+    InterpolateRow = InterpolateRow_Any_LSX;
+    if (IS_ALIGNED(dst_width, 16)) {
+      InterpolateRow = InterpolateRow_LSX;
+    }
+  }
+#endif
+#if defined(HAS_INTERPOLATEROW_LASX)
+  if (TestCpuFlag(kCpuHasLASX)) {
+    InterpolateRow = InterpolateRow_Any_LASX;
+    if (IS_ALIGNED(dst_width, 32)) {
+      InterpolateRow = InterpolateRow_LASX;
+    }
+  }
+#endif
+#if defined(HAS_INTERPOLATEROW_RVV)
+  if (TestCpuFlag(kCpuHasRVV)) {
+    InterpolateRow = InterpolateRow_RVV;
+  }
+#endif
+#if defined(HAS_INTERPOLATEROW_WASMSIMD)
+  if (TestCpuFlag(kCpuHasWASMSIMD)) {
+    InterpolateRow = InterpolateRow_Any_WASMSIMD;
+    if (IS_ALIGNED(dst_width, 16)) {
+      InterpolateRow = InterpolateRow_WASMSIMD;
+    }
+  }
+#endif
+#if defined(HAS_INTERPOLATEROW_HVX)
+  if (TestCpuFlag(kCpuHasHVX)) {
+    InterpolateRow = InterpolateRow_HVX;
+  }
+#endif
+
+  filtering = ScaleFilterReduce(src_width, src_height, dst_width, dst_height,
+                                filtering);
+  ScaleSlope(src_width, src_height, dst_width, dst_height, filtering, &x, &y,
+             &dx, &dy);
+  uint32_t uy = (uint32_t)y;
+  bool staged = false;
+  int last_yi = -1;
+  for (int j = 0; j < dst_height; ++j) {
+    if (uy > max_y) {
+      uy = max_y;
+    }
+    int yi = uy >> 16;
+    int yi1 = yi + 1 < src_height ? yi + 1 : src_height - 1;
+    int yf = filtering == kFilterBilinear ? (int)((uy >> 8) & 255) : 0;
+    uint8_t* d = dst + (ptrdiff_t)j * dst_stride;
+    const uint8_t* src0 = scratch + (ptrdiff_t)yi * dst_stride;
+    const uint8_t* src1 = scratch + (ptrdiff_t)yi1 * dst_stride;
+    if (!staged && j >= dst_height - src_height &&
+        j - (dst_height - src_height) >= yi) {
+      staged = true;
+    }
+    if (staged) {
+      if (yi != last_yi) {
+        if (last_yi >= 0 && yi == last_yi + 1) {
+          memcpy(rowbuf, rowbuf + dst_width, dst_width);
+        } else {
+          memcpy(rowbuf, src0, dst_width);
+        }
+        memcpy(rowbuf + dst_width, src1, dst_width);
+        last_yi = yi;
+      }
+      src0 = rowbuf;
+      src1 = rowbuf + dst_width;
+    }
+    InterpolateRow(d, src0, yi1 == yi ? 0 : (src1 - src0), dst_width, yf);
+    uy += dy;
+  }
+}
+
+static bool I422RotateFused(const uint8_t* src_y,
+                            int src_stride_y,
+                            const uint8_t* src_u,
+                            int src_stride_u,
+                            const uint8_t* src_v,
+                            int src_stride_v,
+                            uint8_t* dst_y,
+                            int dst_stride_y,
+                            uint8_t* dst_u,
+                            int dst_stride_u,
+                            uint8_t* dst_v,
+                            int dst_stride_v,
+                            int width,
+                            int height,
+                            enum RotationMode mode) {
+  const int halfwidth = (width + 1) >> 1;
+  const int halfheight = (height + 1) >> 1;
+  const size_t tile_size = (size_t)16 * halfwidth;
+  const size_t row_size = (size_t)((halfheight + 31) & ~31);
+  if ((height & 1) || halfwidth < 16 || halfheight < 16 ||
+      width <= halfwidth ||
+      (size_t)(width - halfwidth) * dst_stride_u < tile_size ||
+      (size_t)(width - halfwidth) * dst_stride_v < tile_size) {
+    return false;
+  }
+  align_buffer_64(rowbuf, row_size * 2);
+  if (!rowbuf) {
+    return false;
+  }
+  RotateScalePlane2x(src_u, src_stride_u, dst_u, dst_stride_u, halfwidth,
+                     height, halfheight, width, mode);
+  RotateScalePlane2x(src_v, src_stride_v, dst_v, dst_stride_v, halfwidth,
+                     height, halfheight, width, mode);
+  ScaleRotatedPlaneInPlace(dst_u, dst_stride_u, halfheight, height, halfwidth,
+                           width, kFilterBilinear, rowbuf);
+  ScaleRotatedPlaneInPlace(dst_v, dst_stride_v, halfheight, height, halfwidth,
+                           width, kFilterLinear, rowbuf);
+  if (mode == kRotate90) {
+    RotatePlane90(src_y, src_stride_y, dst_y, dst_stride_y, width, height);
+  } else {
+    RotatePlane270(src_y, src_stride_y, dst_y, dst_stride_y, width, height);
+  }
+  free_aligned_buffer_64(rowbuf);
+  return true;
+}
+
 // I422 has half width x full height UV planes, so rotate by 90 and 270
 // require scaling to maintain 422 subsampling.
 LIBYUV_API
@@ -1122,6 +1408,12 @@ int I422Rotate(const uint8_t* src_y,
       // UV plane rotated is a temporary that fits within the Y plane rotated.
 
     case kRotate90:
+      if (I422RotateFused(src_y, src_stride_y, src_u, src_stride_u, src_v,
+                          src_stride_v, dst_y, dst_stride_y, dst_u,
+                          dst_stride_u, dst_v, dst_stride_v, width, height,
+                          mode)) {
+        return 0;
+      }
       RotatePlane90(src_u, src_stride_u, dst_y, dst_stride_y, halfwidth,
                     height);
       r = ScalePlane(dst_y, dst_stride_y, height, halfwidth, dst_u,
@@ -1139,6 +1431,12 @@ int I422Rotate(const uint8_t* src_y,
       RotatePlane90(src_y, src_stride_y, dst_y, dst_stride_y, width, height);
       return 0;
     case kRotate270:
+      if (I422RotateFused(src_y, src_stride_y, src_u, src_stride_u, src_v,
+                          src_stride_v, dst_y, dst_stride_y, dst_u,
+                          dst_stride_u, dst_v, dst_stride_v, width, height,
+                          mode)) {
+        return 0;
+      }
       RotatePlane270(src_u, src_stride_u, dst_y, dst_stride_y, halfwidth,
                      height);
       r = ScalePlane(dst_y, dst_stride_y, height, halfwidth, dst_u,
