@@ -1228,6 +1228,140 @@ int I444Rotate(const uint8_t* src_y,
   return -1;
 }
 
+// Box-filter one I444 chroma sample block into a single I420 sample.
+// Edge columns and rows are clamped to the last available source sample,
+// which is bit exact to HalfBoxRow_C / HalfBoxRow_Odd_C applied to a plane
+// whose odd last row is averaged with itself.
+static uint8_t HalfBoxSampleClamped(const uint8_t* src,
+                                    ptrdiff_t src_stride,
+                                    int src_x,
+                                    int src_y,
+                                    int width,
+                                    int height) {
+  const int x1 = (src_x + 1 < width) ? src_x + 1 : src_x;
+  const int y1 = (src_y + 1 < height) ? src_y + 1 : src_y;
+  const uint8_t* top = src + (ptrdiff_t)src_y * src_stride + src_x;
+  const uint8_t* bot = src + (ptrdiff_t)y1 * src_stride + src_x;
+  if (x1 == src_x && y1 == src_y) {
+    return top[0];
+  }
+  if (y1 == src_y) {
+    return static_cast<uint8_t>((top[0] + top[1] + 1) >> 1);
+  }
+  if (x1 == src_x) {
+    return static_cast<uint8_t>((top[0] + bot[0] + 1) >> 1);
+  }
+  return static_cast<uint8_t>(
+      (top[0] + top[1] + bot[0] + bot[1] + 2) >> 2);
+}
+
+// Fused I444 chroma subsampling (2x2 box) and rotation of one chroma plane.
+// The source I444 plane is width x height. The destination I420 chroma plane
+// has halfwidth x halfheight samples before rotation, so for 90/270 degree
+// rotations it is stored as halfheight x halfwidth.
+static void HalfBoxRotatePlane(const uint8_t* src,
+                               ptrdiff_t src_stride,
+                               uint8_t* dst,
+                               int dst_stride,
+                               int width,
+                               int height,
+                               int halfwidth,
+                               int halfheight,
+                               enum RotationMode mode) {
+  int dst_width;
+  int dst_height;
+  int dy;
+  int dx;
+  if (mode == kRotate90 || mode == kRotate270) {
+    dst_width = halfheight;
+    dst_height = halfwidth;
+  } else {
+    dst_width = halfwidth;
+    dst_height = halfheight;
+  }
+  for (dy = 0; dy < dst_height; ++dy) {
+    uint8_t* dst_row = dst + (ptrdiff_t)dy * dst_stride;
+    for (dx = 0; dx < dst_width; ++dx) {
+      int cx;  // Column of the unrotated I420 chroma sample.
+      int cy;  // Row of the unrotated I420 chroma sample.
+      switch (mode) {
+        case kRotate90:
+          // Inverse of dst_x = halfheight - 1 - cy, dst_y = cx.
+          cx = dy;
+          cy = halfheight - 1 - dx;
+          break;
+        case kRotate270:
+          // Inverse of dst_x = cy, dst_y = halfwidth - 1 - cx.
+          cx = halfwidth - 1 - dy;
+          cy = dx;
+          break;
+        case kRotate180:
+          cx = halfwidth - 1 - dx;
+          cy = halfheight - 1 - dy;
+          break;
+        case kRotate0:
+        default:
+          cx = dx;
+          cy = dy;
+          break;
+      }
+      dst_row[dx] = HalfBoxSampleClamped(src, src_stride, cx * 2, cy * 2,
+                                         width, height);
+    }
+  }
+}
+
+LIBYUV_API
+int I444ToI420Rotate(const uint8_t* src_y,
+                     int src_stride_y,
+                     const uint8_t* src_u,
+                     int src_stride_u,
+                     const uint8_t* src_v,
+                     int src_stride_v,
+                     uint8_t* dst_y,
+                     int dst_stride_y,
+                     uint8_t* dst_u,
+                     int dst_stride_u,
+                     uint8_t* dst_v,
+                     int dst_stride_v,
+                     int width,
+                     int height,
+                     enum RotationMode mode) {
+  int halfwidth;
+  int halfheight;
+  if (!src_y || !src_u || !src_v || !dst_y || !dst_u || !dst_v ||
+      width <= 0 || height == 0 || height == INT_MIN) {
+    return -1;
+  }
+  if (mode != kRotate0 && mode != kRotate90 && mode != kRotate180 &&
+      mode != kRotate270) {
+    return -1;
+  }
+
+  // Negative height means invert the image.
+  if (height < 0) {
+    height = -height;
+    src_y = src_y + (ptrdiff_t)(height - 1) * src_stride_y;
+    src_u = src_u + (ptrdiff_t)(height - 1) * src_stride_u;
+    src_v = src_v + (ptrdiff_t)(height - 1) * src_stride_v;
+    src_stride_y = -src_stride_y;
+    src_stride_u = -src_stride_u;
+    src_stride_v = -src_stride_v;
+  }
+  halfwidth = (width + 1) >> 1;
+  halfheight = (height + 1) >> 1;
+
+  // Luma is copied one sample at a time through the rotation mapping.
+  RotatePlane(src_y, src_stride_y, dst_y, dst_stride_y, width, height, mode);
+
+  // Chroma is subsampled and rotated in a single fused pass.
+  HalfBoxRotatePlane(src_u, src_stride_u, dst_u, dst_stride_u, width, height,
+                     halfwidth, halfheight, mode);
+  HalfBoxRotatePlane(src_v, src_stride_v, dst_v, dst_stride_v, width, height,
+                     halfwidth, halfheight, mode);
+  return 0;
+}
+
 LIBYUV_API
 int NV12ToI420Rotate(const uint8_t* src_y,
                      int src_stride_y,

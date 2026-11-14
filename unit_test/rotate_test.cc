@@ -8,9 +8,11 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
+#include <limits.h>
 #include <stdlib.h>
 
 #include "../unit_test/unit_test.h"
+#include "libyuv/convert.h"
 #include "libyuv/cpu_id.h"
 #include "libyuv/rotate.h"
 
@@ -1255,5 +1257,153 @@ TEST_F(LibYUVRotateTest, TransposeWxH_32_ACEV1_Test) {
 #endif  // defined(HAS_TRANSPOSEWXH_32_ACEV1)
 
 #endif  // ENABLE_ROW_TESTS
+
+// Fused I444 -> I420 conversion with rotation must be bit exact to the
+// stepwise reference I444ToI420() followed by I420Rotate(). Exercised with
+// arbitrary strides and odd dimensions so the edge clamping path is covered.
+static void I444ToI420RotateTest(int width,
+                                 int height,
+                                 int src_stride_pad,
+                                 int dst_stride_pad,
+                                 libyuv::RotationMode mode,
+                                 int invert) {
+  ASSERT_GE(width, 1);
+  ASSERT_GE(height, 1);
+  const int pass_height = invert ? -height : height;
+  const int halfwidth = (width + 1) >> 1;
+  const int halfheight = (height + 1) >> 1;
+  const int rotated = (mode == kRotate90 || mode == kRotate270);
+  const int dst_width = rotated ? height : width;
+  const int dst_height = rotated ? width : height;
+  const int dst_uv_width = rotated ? halfheight : halfwidth;
+  const int dst_uv_height = rotated ? halfwidth : halfheight;
+  const int src_stride = width + src_stride_pad;
+  const int dst_y_stride = dst_width + dst_stride_pad;
+  const int dst_uv_stride = dst_uv_width + dst_stride_pad;
+
+  align_buffer_page_end(src_y, src_stride * height);
+  align_buffer_page_end(src_u, src_stride * height);
+  align_buffer_page_end(src_v, src_stride * height);
+  MemRandomize(src_y, src_stride * height);
+  MemRandomize(src_u, src_stride * height);
+  MemRandomize(src_v, src_stride * height);
+
+  // Stepwise reference: convert first (unrotated), then rotate the I420 frame.
+  align_buffer_page_end(ref_y, src_stride * height);
+  align_buffer_page_end(ref_u, halfwidth * halfheight);
+  align_buffer_page_end(ref_v, halfwidth * halfheight);
+  const uint8_t* conv_y = src_y;
+  const uint8_t* conv_u = src_u;
+  const uint8_t* conv_v = src_v;
+  int conv_stride_y = src_stride;
+  int conv_stride_u = src_stride;
+  int conv_stride_v = src_stride;
+  if (invert) {
+    conv_y = src_y + (height - 1) * src_stride;
+    conv_u = src_u + (height - 1) * src_stride;
+    conv_v = src_v + (height - 1) * src_stride;
+    conv_stride_y = -src_stride;
+    conv_stride_u = -src_stride;
+    conv_stride_v = -src_stride;
+  }
+  ASSERT_EQ(0, I444ToI420(conv_y, conv_stride_y, conv_u, conv_stride_u, conv_v,
+                          conv_stride_v, ref_y, src_stride, ref_u, halfwidth,
+                          ref_v, halfwidth, width, pass_height));
+
+  align_buffer_page_end(dst_y_ref, dst_y_stride * dst_height);
+  align_buffer_page_end(dst_u_ref, dst_uv_stride * dst_uv_height);
+  align_buffer_page_end(dst_v_ref, dst_uv_stride * dst_uv_height);
+  align_buffer_page_end(dst_y_fused, dst_y_stride * dst_height);
+  align_buffer_page_end(dst_u_fused, dst_uv_stride * dst_uv_height);
+  align_buffer_page_end(dst_v_fused, dst_uv_stride * dst_uv_height);
+  memset(dst_y_ref, 1, dst_y_stride * dst_height);
+  memset(dst_u_ref, 2, dst_uv_stride * dst_uv_height);
+  memset(dst_v_ref, 3, dst_uv_stride * dst_uv_height);
+  memset(dst_y_fused, 4, dst_y_stride * dst_height);
+  memset(dst_u_fused, 5, dst_uv_stride * dst_uv_height);
+  memset(dst_v_fused, 6, dst_uv_stride * dst_uv_height);
+
+  ASSERT_EQ(0, I420Rotate(ref_y, src_stride, ref_u, halfwidth, ref_v, halfwidth,
+                          dst_y_ref, dst_y_stride, dst_u_ref, dst_uv_stride,
+                          dst_v_ref, dst_uv_stride, width, height, mode));
+  ASSERT_EQ(0, I444ToI420Rotate(
+                   conv_y, conv_stride_y, conv_u, conv_stride_u, conv_v,
+                   conv_stride_v, dst_y_fused, dst_y_stride, dst_u_fused,
+                   dst_uv_stride, dst_v_fused, dst_uv_stride, width,
+                   pass_height, mode));
+
+  for (int y = 0; y < dst_height; ++y) {
+    for (int x = 0; x < dst_width; ++x) {
+      EXPECT_EQ(dst_y_ref[y * dst_y_stride + x],
+                dst_y_fused[y * dst_y_stride + x])
+          << "Y mismatch at " << x << "," << y << " for " << width << "x"
+          << height << " mode=" << mode << " invert=" << invert;
+    }
+  }
+  for (int y = 0; y < dst_uv_height; ++y) {
+    for (int x = 0; x < dst_uv_width; ++x) {
+      EXPECT_EQ(dst_u_ref[y * dst_uv_stride + x],
+                dst_u_fused[y * dst_uv_stride + x])
+          << "U mismatch at " << x << "," << y;
+      EXPECT_EQ(dst_v_ref[y * dst_uv_stride + x],
+                dst_v_fused[y * dst_uv_stride + x])
+          << "V mismatch at " << x << "," << y;
+    }
+  }
+
+  free_aligned_buffer_page_end(src_y);
+  free_aligned_buffer_page_end(src_u);
+  free_aligned_buffer_page_end(src_v);
+  free_aligned_buffer_page_end(ref_y);
+  free_aligned_buffer_page_end(ref_u);
+  free_aligned_buffer_page_end(ref_v);
+  free_aligned_buffer_page_end(dst_y_ref);
+  free_aligned_buffer_page_end(dst_u_ref);
+  free_aligned_buffer_page_end(dst_v_ref);
+  free_aligned_buffer_page_end(dst_y_fused);
+  free_aligned_buffer_page_end(dst_u_fused);
+  free_aligned_buffer_page_end(dst_v_fused);
+}
+
+TEST_F(LibYUVRotateTest, I444ToI420RotateExact) {
+  static const RotationMode kModes[] = {kRotate0, kRotate90, kRotate180,
+                                        kRotate270};
+  static const int kWidths[] = {1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 31, 33};
+  static const int kHeights[] = {1, 2, 3, 4, 5, 7, 8, 15, 16, 17};
+  static const int kPads[] = {0, 1, 7};
+  for (RotationMode mode : kModes) {
+    for (int width : kWidths) {
+      for (int height : kHeights) {
+        for (int pad : kPads) {
+          I444ToI420RotateTest(width, height, pad, pad, mode, 0);
+          I444ToI420RotateTest(width, height, pad, pad, mode, 1);
+        }
+      }
+    }
+  }
+}
+
+TEST_F(LibYUVRotateTest, I444ToI420RotateArgs) {
+  align_buffer_page_end(src, 64);
+  align_buffer_page_end(dst, 64);
+  MemRandomize(src, 64);
+  // NULL source or destination.
+  EXPECT_EQ(-1, I444ToI420Rotate(NULL, 4, src, 4, src, 4, dst, 4, dst, 2, dst,
+                                 2, 4, 4, kRotate90));
+  EXPECT_EQ(-1, I444ToI420Rotate(src, 4, src, 4, src, 4, NULL, 4, dst, 2, dst,
+                                 2, 4, 4, kRotate90));
+  // Invalid width, zero and INT_MIN height.
+  EXPECT_EQ(-1, I444ToI420Rotate(src, 4, src, 4, src, 4, dst, 4, dst, 2, dst, 2,
+                                 0, 4, kRotate90));
+  EXPECT_EQ(-1, I444ToI420Rotate(src, 4, src, 4, src, 4, dst, 4, dst, 2, dst, 2,
+                                 4, 0, kRotate90));
+  EXPECT_EQ(-1, I444ToI420Rotate(src, 4, src, 4, src, 4, dst, 4, dst, 2, dst, 2,
+                                 4, INT_MIN, kRotate90));
+  // Unsupported rotation mode.
+  EXPECT_EQ(-1, I444ToI420Rotate(src, 4, src, 4, src, 4, dst, 4, dst, 2, dst, 2,
+                                 4, 4, static_cast<RotationMode>(45)));
+  free_aligned_buffer_page_end(src);
+  free_aligned_buffer_page_end(dst);
+}
 
 }  // namespace libyuv

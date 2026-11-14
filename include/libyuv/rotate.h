@@ -87,6 +87,34 @@ int I444Rotate(const uint8_t* src_y,
                int height,
                enum RotationMode mode);
 
+// Fused I444 to I420 conversion with rotation.
+// Performs the I444 to I420 range conversion, chroma resampling (2x2 box
+// filter) and rotation by 0, 90, 180 or 270 degrees in a single pass. The
+// result is bit exact to I444ToI420() followed by I420Rotate().
+// The destination buffers must be sized for the rotated frame: for 90 and 270
+// degree rotations the Y plane is height x width and the chroma planes are
+// ((height + 1) / 2) x ((width + 1) / 2).
+// Arbitrary source and destination strides are supported. Odd width and/or
+// height are handled by clamping the missing edge sample to the last available
+// row and/or column, matching the reference conversion.
+// Negative height inverts the source image before conversion.
+LIBYUV_API
+int I444ToI420Rotate(const uint8_t* src_y,
+                     int src_stride_y,
+                     const uint8_t* src_u,
+                     int src_stride_u,
+                     const uint8_t* src_v,
+                     int src_stride_v,
+                     uint8_t* dst_y,
+                     int dst_stride_y,
+                     uint8_t* dst_u,
+                     int dst_stride_u,
+                     uint8_t* dst_v,
+                     int dst_stride_v,
+                     int width,
+                     int height,
+                     enum RotationMode mode);
+
 // Rotate I010 frame.
 LIBYUV_API
 int I010Rotate(const uint16_t* src_y,
